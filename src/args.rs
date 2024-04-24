@@ -89,6 +89,9 @@ pub struct Args {
     #[structopt(short = "Z", value_name = "FLAG")]
     /// Unstable (nightly-only) flags to Cargo
     pub unstable_flags: Vec<String>,
+    #[structopt(long = "license", short = "l", value_name = "LICENSE")]
+    /// Compatible licenses
+    pub license: Vec<String>,
 }
 
 pub enum Charset {

@@ -3,6 +3,7 @@ use crate::format::Pattern;
 use crate::graph::Graph;
 use anyhow::{anyhow, Context, Error};
 use cargo_metadata::{DependencyKind, Package, PackageId};
+use lazy_regex::regex;
 use petgraph::visit::EdgeRef;
 use petgraph::EdgeDirection;
 use semver::Version;
@@ -77,8 +78,65 @@ pub fn print(args: &Args, graph: &Graph) -> Result<(), Error> {
         let root = &graph.graph[graph.nodes[root]];
 
         print_tree(graph, root, &format, direction, symbols, prefix, args.all);
+        let non_compatible_licenses = find_licenses(graph, root, &args.license)?;
+        if !non_compatible_licenses.is_empty() {
+            println!("Non-compatible licenses found:");
+            for (license, packages) in non_compatible_licenses {
+                println!("{license}: {:?}", packages);
+            }
+        } else {
+            println!("No incompatible licenses found")
+        }
     }
 
+    Ok(())
+}
+
+fn find_licenses(graph: &Graph, root: &Package, compatible_licenses: &[String]) -> Result<HashMap<String, HashSet<String>>, Error> {
+    let mut non_compatible_licenses = HashMap::new();
+    let compatible_licenses: HashSet<String> = compatible_licenses.iter().cloned().collect();
+    find_licenses_for_package(graph, root, &compatible_licenses, &mut non_compatible_licenses)?;
+    Ok(non_compatible_licenses)
+}
+
+fn find_licenses_for_package(
+    graph: &Graph,
+    package: &Package,
+    compatible_licenses: &HashSet<String>,
+    non_compatible_licenses: &mut HashMap<String, HashSet<String>>,
+) -> Result<(), Error> {
+    let idx = graph.nodes[&package.id];
+    if let Some(license) = &package.license {
+        let mut compatible = false;
+        if license.contains('(') {
+            if compatible_licenses.contains(license) {
+                compatible = true;
+            }
+        } else {
+            for license in regex!(r"\sOR\s|\s?/\s?").split(license) {
+                if compatible_licenses.contains(license) {
+                    compatible = true;
+                }
+            }
+        }
+        if !compatible {
+            non_compatible_licenses.entry(license.clone()).or_default().insert(package.name.clone());
+        }
+    }
+    if package.license_file.is_some() {
+        non_compatible_licenses.entry("Nonstandard".to_string()).or_default().insert(package.name.clone());
+    }
+    if package.license.is_none() && package.license_file.is_none() {
+        non_compatible_licenses.entry("Not specified".to_string()).or_default().insert(package.name.clone());
+    }
+    for edge in graph.graph.edges_directed(idx, EdgeDirection::Outgoing) {
+        if *edge.weight() != DependencyKind::Normal {
+            continue;
+        }
+
+        let dep = &graph.graph[edge.target()];
+        find_licenses_for_package(graph, dep, compatible_licenses, non_compatible_licenses)?;
+    }
     Ok(())
 }
 
